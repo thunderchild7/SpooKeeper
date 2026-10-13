@@ -1,0 +1,390 @@
+@page "/"
+@inject IJSRuntime JS
+
+<PageTitle>Spookeeper</PageTitle>
+
+<div class="game-container">
+    <div class="frame">
+        <!-- Top bar like the original -->
+        <div class="top-bar">
+            <div class="logo">SPOOK<br>KEEPER</div>
+            <div class="score-box">
+                <div class="label">SCORE</div>
+                <div class="value">@score.ToString("D6")</div>
+            </div>
+            <div class="level-box">
+                <div class="label">LEVEL @level</div>
+                <div class="quotas">
+                    @foreach (var animal in Enum.GetValues<Animal>().Where(a => (int)a >= 0))
+                    {
+                        <span class="quota">@GetEmoji(animal) @GetCaught(animal)/@GetTarget(animal)</span>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Board -->
+        <div class="board">
+            @for (int r = 0; r < Rows; r++)
+            {
+                <div class="row">
+                    @for (int c = 0; c < Cols; c++)
+                    {
+                        var row = r;
+                        var col = c;
+                        var animal = board[r, c];
+                        var isSelected = selected.HasValue && selected.Value.r == r && selected.Value.c == c;
+                        var isMatching = matching.Contains((r, c));
+                        <div class="tile @(isSelected ? "selected" : "") @(isMatching ? "matching" : "")"
+                             @onclick="() => OnTileClick(row, col)">
+                            <span class="animal">@GetEmoji(animal)</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Bottom time bar -->
+        <div class="bottom-bar">
+            <div class="time-label">TIME</div>
+            <div class="time-bar">
+                <div class="time-fill" style="width: @(timePercent)%"></div>
+            </div>
+            <button class="new-btn" @onclick="NewGame">NEW</button>
+        </div>
+    </div>
+
+    @if (message != null)
+    {
+        <div class="message">@message</div>
+    }
+</div>
+
+<style>
+    .game-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
+        background: #1a0d2e;
+        min-height: 100vh;
+        font-family: 'Courier New', monospace;
+    }
+    .frame {
+        background: #2d1b4e;
+        border: 12px solid #6b3fa0;
+        border-radius: 8px;
+        padding: 8px;
+        box-shadow: inset 0 0 0 4px #e8d5a3, 0 8px 0 #5c4a1f;
+    }
+    .top-bar {
+        display: flex;
+        align-items: center;
+        background: #2c2416;
+        color: #f0e6c8;
+        padding: 6px 10px;
+        margin-bottom: 6px;
+        gap: 16px;
+        font-weight: bold;
+    }
+    .logo {
+        font-size: 14px;
+        line-height: 1.1;
+        letter-spacing: 1px;
+        color: #ff9f1c;
+    }
+    .score-box, .level-box {
+        background: #1a1510;
+        padding: 4px 10px;
+        border: 2px solid #8b6914;
+    }
+    .label { font-size: 10px; color: #aaa; }
+    .value { font-size: 18px; letter-spacing: 2px; }
+    .quotas {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        font-size: 11px;
+    }
+    .quota { white-space: nowrap; }
+    .board {
+        display: inline-block;
+        background: #f5e6d3;
+        border: 4px solid #6b3fa0;
+    }
+    .row { display: flex; }
+    .tile {
+        width: 48px;
+        height: 48px;
+        background: #fff8e7;
+        border: 1px solid #d4c4a0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        user-select: none;
+        position: relative;
+    }
+    .tile:hover { background: #fff; }
+    .tile.selected { outline: 3px solid #e74c3c; z-index: 2; }
+    .tile.matching { background: #ffe066; }
+    .animal { font-size: 28px; line-height: 1; }
+    .bottom-bar {
+        display: flex;
+        align-items: center;
+        background: #2c2416;
+        color: #f0e6c8;
+        padding: 6px 10px;
+        margin-top: 6px;
+        gap: 10px;
+    }
+    .time-label { font-size: 12px; font-weight: bold; }
+    .time-bar {
+        flex: 1;
+        height: 14px;
+        background: #1a1510;
+        border: 2px solid #8b6914;
+        overflow: hidden;
+    }
+    .time-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #ff6b00, #ffaa00);
+        transition: width 0.3s;
+    }
+    .new-btn {
+        background: #8b6914;
+        color: #fff;
+        border: none;
+        padding: 4px 10px;
+        font-family: inherit;
+        font-weight: bold;
+        cursor: pointer;
+    }
+    .new-btn:hover { background: #a07c1a; }
+    .message {
+        margin-top: 12px;
+        color: #fff;
+        font-weight: bold;
+        text-shadow: 1px 1px 0 #000;
+    }
+</style>
+
+@code {
+    const int Rows = 8;
+    const int Cols = 8;
+    enum Animal { Bat, Ghost, Pumpkin, BlackCat, Skeleton, Witch, Spider }
+
+    Animal[,] board = new Animal[Rows, Cols];
+    (int r, int c)? selected = null;
+    HashSet<(int r, int c)> matching = new();
+    int score = 0;
+    int level = 1;
+    int moves = 0;
+    double timePercent = 100;
+    string? message;
+    Random rnd = new();
+    Dictionary<Animal, int> caught = new();
+    Dictionary<Animal, int> targets = new();
+
+    protected override void OnInitialized()
+    {
+        NewGame();
+    }
+
+    void NewGame()
+    {
+        score = 0;
+        level = 1;
+        moves = 0;
+        timePercent = 100;
+        message = "Match 3 or more Halloween creatures!";
+        ResetTargets();
+        GenerateBoard();
+        StateHasChanged();
+    }
+
+    void ResetTargets()
+    {
+        caught.Clear();
+        targets.Clear();
+        foreach (Animal a in Enum.GetValues<Animal>())
+        {
+            if ((int)a < 0) continue;
+            caught[a] = 0;
+            targets[a] = 10 + (level - 1) * 5;
+        }
+    }
+
+    void GenerateBoard()
+    {
+        for (int r = 0; r < Rows; r++)
+            for (int c = 0; c < Cols; c++)
+                board[r, c] = (Animal)rnd.Next(7);
+
+        int safety = 0;
+        while (FindMatches().Count > 0 && safety++ < 100)
+        {
+            foreach (var (r, c) in FindMatches())
+                board[r, c] = (Animal)rnd.Next(7);
+        }
+    }
+
+    string GetEmoji(Animal a)
+    {
+        if ((int)a < 0) return "";
+        return a switch
+        {
+            Animal.Bat => "🦇",
+            Animal.Ghost => "👻",
+            Animal.Pumpkin => "🎃",
+            Animal.BlackCat => "🐈‍⬛",
+            Animal.Skeleton => "💀",
+            Animal.Witch => "🧙",
+            Animal.Spider => "🕷️",
+            _ => ""
+        };
+    }
+
+    int GetCaught(Animal a) => caught.GetValueOrDefault(a, 0);
+    int GetTarget(Animal a) => targets.GetValueOrDefault(a, 10);
+
+    async Task OnTileClick(int r, int c)
+    {
+        if (selected == null)
+        {
+            selected = (r, c);
+            return;
+        }
+
+        var (sr, sc) = selected.Value;
+        if (IsAdjacent(sr, sc, r, c))
+        {
+            (board[sr, sc], board[r, c]) = (board[r, c], board[sr, sc]);
+            moves++;
+
+            var matches = FindMatches();
+            if (matches.Count == 0)
+            {
+                (board[sr, sc], board[r, c]) = (board[r, c], board[sr, sc]);
+                moves--;
+                message = "No match!";
+            }
+            else
+            {
+                await ProcessMatches();
+            }
+        }
+
+        selected = null;
+        StateHasChanged();
+    }
+
+    bool IsAdjacent(int r1, int c1, int r2, int c2)
+        => (Math.Abs(r1 - r2) == 1 && c1 == c2) || (Math.Abs(c1 - c2) == 1 && r1 == r2);
+
+    HashSet<(int r, int c)> FindMatches()
+    {
+        var set = new HashSet<(int, int)>();
+
+        for (int r = 0; r < Rows; r++)
+        {
+            int count = 1;
+            for (int c = 1; c < Cols; c++)
+            {
+                if (board[r, c] == board[r, c - 1] && (int)board[r, c] >= 0)
+                    count++;
+                else
+                {
+                    if (count >= 3)
+                        for (int k = 0; k < count; k++) set.Add((r, c - 1 - k));
+                    count = 1;
+                }
+            }
+            if (count >= 3)
+                for (int k = 0; k < count; k++) set.Add((r, Cols - 1 - k));
+        }
+
+        for (int c = 0; c < Cols; c++)
+        {
+            int count = 1;
+            for (int r = 1; r < Rows; r++)
+            {
+                if (board[r, c] == board[r - 1, c] && (int)board[r, c] >= 0)
+                    count++;
+                else
+                {
+                    if (count >= 3)
+                        for (int k = 0; k < count; k++) set.Add((r - 1 - k, c));
+                    count = 1;
+                }
+            }
+            if (count >= 3)
+                for (int k = 0; k < count; k++) set.Add((Rows - 1 - k, c));
+        }
+
+        return set;
+    }
+
+    async Task ProcessMatches()
+    {
+        while (true)
+        {
+            var matches = FindMatches();
+            if (matches.Count == 0) break;
+
+            matching = matches;
+            int points = matches.Count * 10 * level;
+            score += points;
+
+            // Track caught animals
+            foreach (var (r, c) in matches)
+            {
+                var a = board[r, c];
+                if ((int)a >= 0)
+                    caught[a] = caught.GetValueOrDefault(a, 0) + 1;
+            }
+
+            message = $"+{points}";
+            timePercent = Math.Min(100, timePercent + matches.Count * 2);
+            StateHasChanged();
+            await Task.Delay(350);
+
+            foreach (var (r, c) in matches)
+                board[r, c] = (Animal)(-1);
+
+            for (int c = 0; c < Cols; c++)
+            {
+                int write = Rows - 1;
+                for (int r = Rows - 1; r >= 0; r--)
+                {
+                    if ((int)board[r, c] != -1)
+                    {
+                        board[write, c] = board[r, c];
+                        if (write != r) board[r, c] = (Animal)(-1);
+                        write--;
+                    }
+                }
+                for (int r = write; r >= 0; r--)
+                    board[r, c] = (Animal)rnd.Next(7);
+            }
+
+            matching.Clear();
+            StateHasChanged();
+            await Task.Delay(180);
+        }
+
+        // Level up if all quotas met
+        bool allMet = targets.All(kv => caught.GetValueOrDefault(kv.Key, 0) >= kv.Value);
+        if (allMet)
+        {
+            level++;
+            message = $"Level {level}!";
+            ResetTargets();
+            timePercent = 100;
+        }
+        else
+        {
+            message = null;
+        }
+    }
+}
