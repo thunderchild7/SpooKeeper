@@ -1,4 +1,5 @@
 @page "/"
+@implements IDisposable
 @inject IJSRuntime JS
 
 <PageTitle>Spookeeper</PageTitle>
@@ -25,7 +26,7 @@
 
         <!-- Board, centered in the frame and scaled to the space around it -->
         <div class="board-wrap">
-            <div class="board">
+            <div class="board @(gameOver ? "locked" : "")">
                 @for (int r = 0; r < Rows; r++)
                 {
                     <div class="row">
@@ -50,9 +51,9 @@
 
         <!-- Bottom time bar -->
         <div class="bottom-bar">
-            <div class="time-label">TIME</div>
+            <div class="time-label">TIME @timeLeftSeconds</div>
             <div class="time-bar">
-                <div class="time-fill" style="width: @(timePercent)%"></div>
+                <div class="time-fill @(timePercent <= 20 ? "low" : "")" style="width: @(timePercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%"></div>
             </div>
             <button class="new-btn" @onclick="NewGame">NEW</button>
         </div>
@@ -148,6 +149,10 @@
         display: flex;
         justify-content: center;
     }
+    .board.locked {
+        filter: grayscale(0.45);
+        opacity: 0.72;
+    }
     .board {
         width: min(100%, var(--side));
         aspect-ratio: 1;
@@ -232,7 +237,10 @@
     .time-fill {
         height: 100%;
         background: linear-gradient(90deg, #ff6b00, #ffaa00);
-        transition: width 0.3s;
+        transition: width 0.1s linear;
+    }
+    .time-fill.low {
+        background: linear-gradient(90deg, #c0392b, #e74c3c);
     }
     @@media (max-height: 520px) {
         .game-container { --side: min(500px, calc(100dvh - 200px), calc(100vw - 28px)); }
@@ -276,30 +284,86 @@
     Animal[,] board = new Animal[Rows, Cols];
     (int r, int c)? selected = null;
     HashSet<(int r, int c)> matching = new();
+    const double RoundSeconds = 90;
+    const int TimerTickMs = 100;
+
     int score = 0;
     int level = 1;
     int moves = 0;
     double timePercent = 100;
+    bool gameOver;
+    bool busy;
     string? message;
     Random rnd = new();
     Dictionary<Animal, int> caught = new();
     Dictionary<Animal, int> targets = new();
+    CancellationTokenSource? timerCts;
+
+    int timeLeftSeconds => (int)Math.Ceiling(timePercent / 100.0 * RoundSeconds);
 
     protected override void OnInitialized()
     {
         NewGame();
     }
 
+    public void Dispose()
+    {
+        timerCts?.Cancel();
+        timerCts?.Dispose();
+        timerCts = null;
+    }
+
     void NewGame()
     {
+        timerCts?.Cancel();
+        timerCts?.Dispose();
+        timerCts = new CancellationTokenSource();
+        var token = timerCts.Token;
+
         score = 0;
         level = 1;
         moves = 0;
         timePercent = 100;
+        gameOver = false;
+        busy = false;
+        selected = null;
+        matching.Clear();
         message = "Match 3 or more Halloween creatures!";
         ResetTargets();
         GenerateBoard();
-        StateHasChanged();
+        _ = RunTimer(token);
+    }
+
+    async Task RunTimer(CancellationToken token)
+    {
+        var drainPerTick = 100.0 / RoundSeconds * (TimerTickMs / 1000.0);
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(TimerTickMs));
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                if (gameOver) continue;
+                timePercent = Math.Max(0, timePercent - drainPerTick);
+                if (timePercent <= 0)
+                {
+                    timePercent = 0;
+                    if (!busy)
+                        EndRound();
+                }
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+        {
+        }
+    }
+
+    void EndRound()
+    {
+        gameOver = true;
+        timePercent = 0;
+        selected = null;
+        message = "Time's up!";
     }
 
     void ResetTargets()
@@ -349,6 +413,8 @@
 
     async Task OnTileClick(int r, int c)
     {
+        if (gameOver || busy) return;
+
         if (selected == null)
         {
             selected = (r, c);
@@ -370,7 +436,17 @@
             }
             else
             {
-                await ProcessMatches();
+                busy = true;
+                try
+                {
+                    await ProcessMatches();
+                }
+                finally
+                {
+                    busy = false;
+                    if (timePercent <= 0 && !gameOver)
+                        EndRound();
+                }
             }
         }
 
@@ -477,9 +553,14 @@
         if (allMet)
         {
             level++;
+            gameOver = false;
             message = $"Level {level}!";
             ResetTargets();
             timePercent = 100;
+        }
+        else if (timePercent <= 0)
+        {
+            EndRound();
         }
         else
         {
