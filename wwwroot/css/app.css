@@ -1,5 +1,9 @@
 html, body {
+    margin: 0;
+    height: 100%;
+    background: #1a0d2e;
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    overflow: hidden;
 }
 
 h1:focus {
@@ -21,7 +25,7 @@ a, .btn-link {
 }
 
 .content {
-    padding-top: 1.1rem;
+    padding-top: 0;
 }
 
 .valid.modified:not([type=checkbox]) {
